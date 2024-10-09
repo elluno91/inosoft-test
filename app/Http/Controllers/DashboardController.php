@@ -8,131 +8,253 @@ use function Symfony\Component\String\s;
 
 class DashboardController extends Controller
 {
-    public $headQuarterLatitude = "-7.9826";
-    public $headQuarterLongitude = "112.6308";
-    public $countSales = 10;
-    public $totalMaxVisitStore = 30;
-    public $date = "2024-10-01";
+    public $headQuarterLatitude = "-7.9826"; //Latitude kantor pusat
+    public $headQuarterLongitude = "112.6308"; //Longitude kantor pusat
+    public $countSales = 10; //jumlah sales
+    public $totalMaxVisitStore = 30; //jumlah maksimum kunjungan toko oleh tiap sales
+    public $date = "2024-10-01"; //tanggal yang diinginkan
 
     public function index() {
         return view('dashboard');
     }
 
-    public function store(Request $request) {
-        set_time_limit(300);
+    private function createListStoreFromCSV($file_content) {
+        // fungsi ini digunakan untuk membuat daftar toko dari file csv
 
-        if($request->hasFile('file')) {
-            $file = $request->file('file');
-            $file_content = file_get_contents($file->getRealPath());
+        //pisahkan data berdasarkan karakter new line
+        $data_no_linebreak = explode("\n", $file_content);
+        //buang array pada baris teratas karena tidak mengandung data
+        $data_no_linebreak = array_slice($data_no_linebreak, 1, -1);
 
-            //explode by line
-            $data_no_linebreak = explode("\n", $file_content);
-            //remove first array (because contain description)
-            $data_no_linebreak = array_slice($data_no_linebreak, 1, -1);
+        //inisialisasi array toko yang valid dan tidak valid
+        $stores = array();
+        $invalid_stores = array();
 
-            //list sales
-            $sales = array();
-            //create dummy sales
-            for ($i = 0; $i < $this->countSales; $i++) {
-                $sales[] = array(
-                    'code' => str_pad($i + 1, 5, "0", STR_PAD_LEFT),
-                    'name' => "Sales " . ($i + 1),
-                    'schedule' => array(),
+        //baca data csv yang sudah dipisahkan per baris
+        foreach ($data_no_linebreak as $index => $value) {
+            //pisahkan data berdasarkan koma
+            $explode = explode(",", $value);
+            //Hitung total hari senin pada bulan yang sudah ditentukan
+            $total_monday = $this->countMondayInMonth($this->date);
+
+            /*
+             * Hasil index dan isi dari explode data csv ($explode)
+             * 0 => nama toko
+             * 1 => kode toko
+             * 2 => latitude
+             * 3 => longitude
+             * 4 => alamat
+             * 5 => kabupaten dan kode pos
+             * 6 => jenis kunjungan toko
+             */
+
+            //tentukan total kunjungan yang diperlukan setiap toko berdasarkan jenisnya
+            switch (trim(strtolower($explode[6]))) { //$explode[6] adalah index berisikan jenis kunjungan dari data yang sudah dipisahkan koma
+                case "weekly": //tiap minggu
+                    $remaining_visit = $total_monday; //total kunjungan adalah total hari senin dalam bulan yang sudah ditentukan
+                    break;
+                case "biweekly": //tiap 2 minggu
+                    $remaining_visit = $total_monday / 2;  //total kunjungan adalah total hari senin dibagi dua dalam bulan yang sudah ditentukan
+                    break;
+                case "monthly": //1 bulan sekali
+                    $remaining_visit = 1;
+                    break;
+                default:
+                    $remaining_visit = 0;
+                    break;
+            }
+
+            //jika latitude dan longitude tidak sama dengan 0, maka dianggap data toko valid
+            if ($explode[2] != 0 || $explode[3] != 0) {
+                $stores[] = array(
+                    'name' => trim($explode[0]),
+                    'code' => trim($explode[1]),
+                    'longitude' => $explode[2],
+                    'latitude' => $explode[3],
+                    'address' => trim($explode[4]),
+                    'postal_code' => trim($explode[5]),
+                    'interval' => strtolower(trim($explode[6])),
+                    'visit_remaining' => $remaining_visit,
+                    'visited_date' => array(), //daftar tanggal kunjungan yang sudah dilakukan oleh sales
+                    'km_distance_from_headquarter' => $this->distance($this->headQuarterLatitude, $this->headQuarterLongitude, $explode[3], $explode[2]), //perhitungan jarak dari toko dengan kantor
+                );
+            } else {
+                //data toko yang tidak valid karena latitude dan longitude sama dengan 0
+                $invalid_stores[] = array(
+                    'name' => trim($explode[0]),
+                    'code' => trim($explode[1]),
+                    'longitude' => $explode[2],
+                    'latitude' => $explode[3],
+                    'address' => trim($explode[4]),
+                    'postal_code' => trim($explode[5]),
+                    'interval' => strtolower(trim($explode[6])),
+                    'visit_remaining' => $remaining_visit,
+                    'visited_date' => array(), //daftar tanggal kunjungan yang sudah dilakukan oleh sales
+                    'km_distance_from_headquarter' => $this->distance($this->headQuarterLatitude, $this->headQuarterLongitude, $explode[3], $explode[2]),  //perhitungan jarak dari toko dengan kantor
                 );
             }
+        }
 
-            //list store
-            $stores = array();
-            $invalid_stores = array();
-            foreach ($data_no_linebreak as $index => $value) {
+        //urutkan data toko berdasarkan jarak dari kantor ke toko dimulai yang terdekat hingga terjauh
+        $keys = array_column($stores, 'km_distance_from_headquarter');
+        array_multisort($keys, SORT_ASC, $stores);
 
-                $explode = explode(",", $value);
-                //Get total monday in a month
-                $total_monday = $this->countMondayInMonth($this->date);
 
-                switch (trim(strtolower($explode[6]))) {
-                    case "weekly":
-                        $remaining_visit = $total_monday;
-                        break;
-                    case "biweekly":
-                        $remaining_visit = 2;
-                        break;
-                    case "monthly":
-                        $remaining_visit = 1;
-                        break;
-                    default:
-                        $remaining_visit = 0;
-                        break;
-                }
+        return $stores;
+    }
 
-                if ($explode[2] != 0 || $explode[3] != 0) {
-                    $stores[] = array(
-                        'name' => trim($explode[0]),
-                        'code' => trim($explode[1]),
-                        'longitude' => $explode[2],
-                        'latitude' => $explode[3],
-                        'address' => trim($explode[4]),
-                        'postal_code' => trim($explode[5]),
-                        'interval' => strtolower(trim($explode[6])),
-                        'visit_remaining' => $remaining_visit,
-                        'visited_date' => array(),
-                        'km_distance_from_headquarter' => $this->distance($this->headQuarterLatitude, $this->headQuarterLongitude, $explode[3], $explode[2]),
-                    );
-                } else {
-                    $invalid_stores[] = array(
-                        'name' => trim($explode[0]),
-                        'code' => trim($explode[1]),
-                        'longitude' => $explode[2],
-                        'latitude' => $explode[3],
-                        'address' => trim($explode[4]),
-                        'postal_code' => trim($explode[5]),
-                        'interval' => strtolower(trim($explode[6])),
-                        'visit_remaining' => $remaining_visit,
-                        'visited_date' => array(),
-                        'km_distance_from_headquarter' => $this->distance($this->headQuarterLatitude, $this->headQuarterLongitude, $explode[3], $explode[2]),
+    private function createListSales() {
+        //fungsi ini digunakan untuk membuat daftar sales
+
+        //inisialiasi array sales
+        $sales = array();
+        //buat data dummy sales
+        for ($i = 0; $i < $this->countSales; $i++) {
+            $sales[] = array(
+                'code' => str_pad($i + 1, 5, "0", STR_PAD_LEFT), //buat kode sales dengan 5 digit angka
+                'name' => "Sales " . ($i + 1), //nama sales
+                'schedule' => array(), //digunakan untuk mencatat jadwal kunjungan sales
+            );
+        }
+
+        return $sales;
+    }
+
+    private function generateScheduleSales($sales) {
+        //fungsi ini digunakan untuk membuat kerangka daftar tanggal kunjugan tiap sales
+
+        $total_date_in_month = date("t", strtotime($this->date)); //menghitung banyak nya hari pada tanggal yang sudah ditentukan
+        for($i=0;$i<count($sales);$i++) { //perulangan sebanyak data sales dalam hal ini 10 orang
+            for($j=1;$j<=$total_date_in_month;$j++) { //perulangan sebanyak hari (oktober terdapat 31 hari)
+                $month = date("m", strtotime($this->date)); //mengambil 2 digit angka bulan dari tanggal yang sudah ditentukan
+                $year = date("Y", strtotime($this->date)); //mengambil 4 digit angka tahun dari tanggal yang sudah ditentukan
+                $iso_numeric_date = date("N", strtotime($year."-".$month."-".$j)); //mengambil informasi hari ke N pada tanggal yang sudah ditentukan
+
+                /*
+                 * iso numeric akan menampilkan angka dari 1 - 7 dari tanggal yang sudah ditentukan
+                 * angka 1 => senin,
+                 * dst
+                 * angka 7 => minggu
+                 */
+
+                //jika angka yang dihasilkan tidak sama dengan 7 maka buat kerangka daftar kunjungan pada tanggal tersebut
+                if($iso_numeric_date != 7) {
+                    $sales[$i]['schedule'][] = array(
+                        'date' => $year . "-" . $month . "-" . str_pad($j,2,"0",STR_PAD_LEFT), //tanggal
+                        'remaining_visit_store' => $this->totalMaxVisitStore, //digunakan sebagai batas maksimum kunjungan yang dapat dilakukan sales dalam 1 hari (1 hari maks 30 kunjungan)
+                        'store' => array(), //daftar toko yang akan dikunjungi
                     );
                 }
             }
+        }
+        return $sales;
+    }
 
-            //sort store by near to far from headquarters
-            $keys = array_column($stores, 'km_distance_from_headquarter');
-            array_multisort($keys, SORT_ASC, $stores);
+    private function createTable($sales, $store) {
+        $total_date_in_month = date("t", strtotime($this->date)); //menghitung banyak nya hari pada tanggal yang sudah ditentukan
 
-            $total_date_in_month = date("t", strtotime($this->date));
-            for($i=0;$i<count($sales);$i++) {
-                for($j=1;$j<=$total_date_in_month;$j++) {
-                    $month = date("m", strtotime($this->date));
-                    $year = date("Y", strtotime($this->date));
-                    $iso_numeric_date = date("N", strtotime($year."-".$month."-".$j));
+        $html = "<table cellpadding='10' cellspacing='10' border='1'>";
+        $html .= "<tr>";
+        $html .= "<td>Sales</td>";
+        for($i=1;$i<=$total_date_in_month;$i++) {
+            $month = date("m", strtotime($this->date));
+            $year = date("Y", strtotime($this->date));
+            $date = str_pad($i,2,"0",STR_PAD_LEFT);
+            $html .= "<td>".$date."-".$month."-".$year."</td>";
+        }
+        $html .= "</tr>";
+        for($i=0;$i<count($sales);$i++) {
+            $html .= "<tr>";
+            $html .= "<td>".$sales[$i]['name']."</td>";
+            for($j=1;$j<=$total_date_in_month;$j++) {
+                $current_date = str_pad($j,2,"0",STR_PAD_LEFT);
+                $sales_schedules = $sales[$i]['schedule'];
+                $is_empty = true;
+                foreach($sales_schedules as $index => $sales_schedule) {
+                    if(date("d",strtotime($sales_schedule['date'])) == $current_date) {
+                        $html .= "<td>";
+                        $html .= "<ol>";
+                        $stores = $sales_schedule['store'];
+                        foreach($stores as $index => $store) {
+                            $html .= "<li>".$store['name']." - ".$store['interval']."</li>";
+                        }
 
-                    if($iso_numeric_date != 7) {
-                        $sales[$i]['schedule'][] = array(
-                            'date' => $year . "-" . $month . "-" . str_pad($j,2,"0",STR_PAD_LEFT),
-                            'remaining_visit_store' => $this->totalMaxVisitStore,
-                            'store' => array(),
-                        );
+                        $html .= "</ol>";
+                        $html .= "</td>";
+                        $is_empty = false;
+
+                        break;
                     }
                 }
+                if($is_empty) {
+                    $html .= "<td>-</td>";
+                }
             }
+            $html .= "</tr>";
+        }
+        $html .= "</table>";
 
-            $is_all_visited = false;
-            $ctr = 0;
-            $cur_index_store = 0;
+        return $html;
+    }
+
+    public function store(Request $request) {
+        set_time_limit(300); //ubah limit eksusi script php menjadi 300 detik (untuk menghindari time out ketika sedang memproses data)
+
+        if($request->hasFile('file')) {
+
+            $file = $request->file('file');
+            $file_content = file_get_contents($file->getRealPath()); //mendapatkan isi dari file csv yang sudah diupload
+
+            $stores = $this->createListStoreFromCSV($file_content);
+            $sales = $this->createListSales();
+            $sales = $this->generateScheduleSales($sales);
+
+            $total_date_in_month = date("t", strtotime($this->date)); //menghitung banyak nya hari pada tanggal yang sudah ditentukan
+
+            $is_all_visited = false; //indikator untuk menentukan apakah semua toko sudah dikunjungi atau belum
+            $cur_index_store = 0; //index untuk membaca detail toko di dalam array toko
+
+            //lakukan perulang selama toko masih belum dikunjungi
             while(!$is_all_visited) {
+
+                //perulangan sebanyak total hari dari tanggal yang sudah dtentukan (31 hari di bulan oktober 2024)
                 for($i=1;$i<=$total_date_in_month;$i++) {
-                    $month = date("m", strtotime($this->date));
-                    $year = date("Y", strtotime($this->date));
-                    $date = $year . "-" . $month . "-" . str_pad($i,2,"0",STR_PAD_LEFT);
 
+                    $month = date("m", strtotime($this->date)); //mengambil 2 digit angka bulan dari tanggal yang sudah ditentukan
+                    $year = date("Y", strtotime($this->date)); //mengambil 4 digit angka tahun dari tanggal yang sudah ditentukan
+                    $date = $year . "-" . $month . "-" . str_pad($i,2,"0",STR_PAD_LEFT); //buat tanggal berdasarkan perulangan (contoh 2024-10-01)
+
+                    //perulangan sebanyak total sales
                     foreach($sales as $index => $value) {
-                        $sales_schedules = $value['schedule'];
-                        $is_sales_visited_a_store = false;
 
+                        $sales_schedules = $value['schedule']; //ambil jadwal kunjungan sales
+
+                        //perulangan sebanyak jadwal sales yang sedang diproses
+                        /*
+                            Contoh struktur data $sales_schedules :
+
+                            $sales[$i]['schedule'][] = array(
+                            'date' => '2024-10-01'
+                            'remaining_visit_store' => 30
+                            'store' => array(),
+                            );
+                         */
                         foreach($sales_schedules as $index2 => $sales_schedule) {
 
-                            //check if sales has remaining visit store for spesific date
+                            /*
+                                Contoh struktur data $sales_schedule :
+
+                                $sales_schedule = array(
+                                    'date' => '2024-10-01'
+                                    'remaining_visit_store' => 30
+                                    'store' => array(),
+                                );
+                             */
+
+                            //periksa apakah jadwal kunjungan sales terdapat tanggal 2024-10-01, dan sisa kunjungan yang dimiliki lebih dari 0
                             if($sales_schedule['date'] == $date && $sales_schedule['remaining_visit_store'] != 0) {
 
+                                //Jika jadwal kunjungan sales sudah tidak kosong pada tanggal 2024-10-01
                                 if( count($sales_schedule['store']) > 0) {
 
                                     $cur_index_store = 0;
@@ -304,31 +426,38 @@ class DashboardController extends Controller
                                     }
 
                                 } else {
+
+                                    /*
+                                     * Segmen program ini berfungsi untuk memasukkan toko sebanyak 1 buah dari daftar toko ke tiap sales pada tanggal 1
+                                     *
+                                     * Jika daftar kunjungan sales masih kosong, maka masukkan toko di index ke 0 dst
+                                     */
+
                                     $store = $stores[$cur_index_store];
 
-                                    $sales_schedule['remaining_visit_store'] -= 1;
-                                    $sales_schedule['store'][] = $store;
-                                    $sales_schedules[$index2] = $sales_schedule;
-                                    $sales[$index]['schedule'] = $sales_schedules;
+                                    $sales_schedule['remaining_visit_store'] -= 1; //jumlah sisa kunjungan sales ke toko berkurang 1
 
-                                    $store['visit_remaining'] -= 1;
-                                    $store['visited_date'][] = $date;
-                                    $stores[$cur_index_store] = $store;
+                                    $sales_schedule['store'][] = $store; //masukan detail toko ke jadwal kunjungan sales
+                                    $sales_schedules[$index2] = $sales_schedule;
+                                    $sales[$index]['schedule'] = $sales_schedules; //simpan kembali data jadwal kunjungan yang sudah diubah ke sales terkait
+
+                                    $store['visit_remaining'] -= 1; //jumlah kebutuhan kunjungan tiap toko berkurang 1 (weekly, biweekly, monthly)
+                                    $store['visited_date'][] = $date; //masukkan tanggal kunjungan yang akan dilakukan sales
+                                    $stores[$cur_index_store] = $store; //simpan kembali data toko yang sudah diubah ke daftar toko
 
                                     $cur_index_store++;
                                     break;
                                 }
                             }
 
-                            if($is_sales_visited_a_store) {
-
-                                break;
-                            }
                         }
                     }
 
                 }
 
+                /*
+                 * Lakukan pengecekkan terhadap semua toko apakah jumlah kebutuhan kunjungan masih ada atau tidak
+                 */
                 $is_all_visited = true;
                 foreach($stores as $index => $store) {
                     if($store['visit_remaining'] > 0) {
@@ -336,61 +465,10 @@ class DashboardController extends Controller
                         break;
                     }
                 }
-                $ctr++;
             }
-
-            echo "is all visited : ".$is_all_visited;
-            echo "<pre>";
-
-            $sales_schedules = $sales[0]['schedule'][12]['store'];
-            foreach($sales_schedules as $index => $sales_schedule) {
-                echo $sales_schedule['latitude'].",".$sales_schedule['longitude'].",red,marker,\"".$sales_schedule['name']."\"";
-                echo "<br />";
-            }
-
-            die();
-
-
-            echo "<table cellpadding='10' cellspacing='10' border='1'>";
-            echo "<tr>";
-            echo "<td>Sales</td>";
-            for($i=1;$i<=$total_date_in_month;$i++) {
-                $month = date("m", strtotime($this->date));
-                $year = date("Y", strtotime($this->date));
-                $date = str_pad($i,2,"0",STR_PAD_LEFT);
-                echo "<td>".$date."-".$month."-".$year."</td>";
-            }
-            echo "</tr>";
-            for($i=0;$i<count($sales);$i++) {
-                echo "<tr>";
-                echo "<td>".$sales[$i]['name']."</td>";
-                for($j=1;$j<=$total_date_in_month;$j++) {
-                    $current_date = str_pad($j,2,"0",STR_PAD_LEFT);
-                    $sales_schedules = $sales[$i]['schedule'];
-                    $is_empty = true;
-                    foreach($sales_schedules as $index => $sales_schedule) {
-                        if(date("d",strtotime($sales_schedule['date'])) == $current_date) {
-                            echo "<td>";
-                            echo "<ol>";
-                            $stores = $sales_schedule['store'];
-                            foreach($stores as $index => $store) {
-                                echo "<li>".$store['name']." - ".$store['interval']."</li>";
-                            }
-
-                            echo "</ol>";
-                            echo "</td>";
-                            $is_empty = false;
-
-                            break;
-                        }
-                    }
-                    if($is_empty) {
-                        echo "<td>-</td>";
-                    }
-                }
-                echo "</tr>";
-            }
-            echo "</table>";
+            
+            $html = $this->createTable($sales, $stores);
+            echo $html;
         }
     }
 
