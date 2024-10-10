@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use function Symfony\Component\String\s;
 
 class DashboardController extends Controller
 {
@@ -65,34 +64,19 @@ class DashboardController extends Controller
             }
 
             //jika latitude dan longitude tidak sama dengan 0, maka dianggap data toko valid
-            if ($explode[2] != 0 || $explode[3] != 0) {
-                $stores[] = array(
-                    'name' => trim($explode[0]),
-                    'code' => trim($explode[1]),
-                    'longitude' => $explode[2],
-                    'latitude' => $explode[3],
-                    'address' => trim($explode[4]),
-                    'postal_code' => trim($explode[5]),
-                    'interval' => strtolower(trim($explode[6])),
-                    'visit_remaining' => $remaining_visit,
-                    'visited_date' => array(), //daftar tanggal kunjungan yang sudah dilakukan oleh sales
-                    'km_distance_from_headquarter' => $this->distance($this->headQuarterLatitude, $this->headQuarterLongitude, $explode[3], $explode[2]), //perhitungan jarak dari toko dengan kantor
-                );
-            } else {
-                //data toko yang tidak valid karena latitude dan longitude sama dengan 0
-                $invalid_stores[] = array(
-                    'name' => trim($explode[0]),
-                    'code' => trim($explode[1]),
-                    'longitude' => $explode[2],
-                    'latitude' => $explode[3],
-                    'address' => trim($explode[4]),
-                    'postal_code' => trim($explode[5]),
-                    'interval' => strtolower(trim($explode[6])),
-                    'visit_remaining' => $remaining_visit,
-                    'visited_date' => array(), //daftar tanggal kunjungan yang sudah dilakukan oleh sales
-                    'km_distance_from_headquarter' => $this->distance($this->headQuarterLatitude, $this->headQuarterLongitude, $explode[3], $explode[2]),  //perhitungan jarak dari toko dengan kantor
-                );
-            }
+            $stores[] = array(
+                'name' => trim($explode[0]),
+                'code' => trim($explode[1]),
+                'longitude' => $explode[2],
+                'latitude' => $explode[3],
+                'address' => trim($explode[4]),
+                'postal_code' => trim($explode[5]),
+                'interval' => strtolower(trim($explode[6])),
+                'visit_remaining' => $remaining_visit,
+                'visited_date' => array(), //daftar tanggal kunjungan yang sudah dilakukan oleh sales
+                'km_distance_from_headquarter' => $this->distance($this->headQuarterLatitude, $this->headQuarterLongitude, $explode[3], $explode[2]), //perhitungan jarak dari toko dengan kantor
+            );
+
         }
 
         //urutkan data toko berdasarkan jarak dari kantor ke toko dimulai yang terdekat hingga terjauh
@@ -466,7 +450,7 @@ class DashboardController extends Controller
                     }
                 }
             }
-            
+
             $html = $this->createTable($sales, $stores);
             echo $html;
         }
