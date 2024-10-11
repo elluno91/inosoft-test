@@ -137,30 +137,35 @@ class DashboardController extends Controller
     private function createTable($sales, $store) {
         $total_date_in_month = date("t", strtotime($this->date)); //menghitung banyak nya hari pada tanggal yang sudah ditentukan
 
-        $html = "<table cellpadding='10' cellspacing='10' border='1'>";
-        $html .= "<tr>";
+        $html = "<table class='table table-responsive table-striped table-hover'>";
+        $html .= "<thead><tr>";
         $html .= "<td>Sales</td>";
+        //Membuat header tanggal
         for($i=1;$i<=$total_date_in_month;$i++) {
             $month = date("m", strtotime($this->date));
             $year = date("Y", strtotime($this->date));
             $date = str_pad($i,2,"0",STR_PAD_LEFT);
             $html .= "<td>".$date."-".$month."-".$year."</td>";
         }
-        $html .= "</tr>";
+        $html .= "</tr></thead><tbody>";
+        //Perulangan sebanyak jumlah sales
         for($i=0;$i<count($sales);$i++) {
             $html .= "<tr>";
             $html .= "<td>".$sales[$i]['name']."</td>";
+            //Perulangan sebanyak tanggal
             for($j=1;$j<=$total_date_in_month;$j++) {
                 $current_date = str_pad($j,2,"0",STR_PAD_LEFT);
                 $sales_schedules = $sales[$i]['schedule'];
                 $is_empty = true;
+                //Perulangan sebanyak jadwal kunjungan sales
                 foreach($sales_schedules as $index => $sales_schedule) {
+                    //Periksa apakah tanggal yang sedang dalam perulangan cocok dengan tanggal yang ada di jadwal kunjungan sales
                     if(date("d",strtotime($sales_schedule['date'])) == $current_date) {
                         $html .= "<td>";
                         $html .= "<ol>";
                         $stores = $sales_schedule['store'];
                         foreach($stores as $index => $store) {
-                            $html .= "<li>".$store['name']." - ".$store['interval']."</li>";
+                            $html .= "<li>".$store['name']."</li>";
                         }
 
                         $html .= "</ol>";
@@ -176,9 +181,129 @@ class DashboardController extends Controller
             }
             $html .= "</tr>";
         }
-        $html .= "</table>";
+        $html .= "</tbody></table>";
 
         return $html;
+    }
+
+    private function isAllStoreAlreadyVisited($stores) : bool {
+        //cek apakah semua toko telah habis dikunjungi atau belum
+        $is_all_visited = true;
+        foreach($stores as $index => $store) {
+            if($store['visit_remaining'] > 0) {
+                $is_all_visited = false;
+                break;
+            }
+        }
+
+        return $is_all_visited;
+    }
+
+    private function checkStoreIsAlreadyVisitedBySameSales($sales_schedule, $store) {
+        //cek apakah jadwal kunjungan sales yang diperiksa sudah terdapat toko yang akan dikunjungi atau belum
+        $can_visit_store = true;
+        foreach ($sales_schedule['store'] as $index4 => $sales_store) {
+            if ($sales_store['code'] == $store['code']) {
+                $can_visit_store = false;
+                $err_message = $sales_schedule['date']." - Sudah divisit oleh sales yang sama";
+                break;
+            }
+        }
+        return $can_visit_store;
+    }
+
+    private function checkStoreIsAlreadyVisitedAtSpesificDate($store, $date) {
+        //cek apakah toko sudah dikunjungi pada tanggal yang sudah ditentukan
+        $can_visit_store = true;
+        if(count($store['visited_date'])>0) {
+            $store_visited_dates = $store['visited_date'];
+            foreach ($store_visited_dates as $index4 => $store_visited_date) {
+                if ($store_visited_date == $date) {
+                    $can_visit_store = false;
+                    $err_message = "$date - Sudah pernah divisit di tanggal yang sama";
+                    break;
+                }
+            }
+        }
+        return $can_visit_store;
+    }
+
+    private function checkIntervalVisitStore($store, $date) {
+        //cek interval kunjungan toko apa sudah memenuhi syarat atau belum jika tanggal sekarang akan dilakukan kunjungan kembali.
+        $can_visit_store = true;
+        if(count($store['visited_date'])>0) {
+
+            $visited_dates = $store['visited_date'];
+            $diff_day_last_visit_second = 0;
+
+            //menghitung interval tanggal sekarang dengan tanggal kunjungan terakhir toko
+            if(strtotime($date) > strtotime($visited_dates[count($visited_dates) - 1])) {
+                $diff_day_last_visit_second =  strtotime($date) - strtotime($visited_dates[count($visited_dates) - 1]);
+            } else {
+                $diff_day_last_visit_second = strtotime($visited_dates[count($visited_dates) - 1]) - strtotime($date);
+            }
+            $diff_day_last_visit = round($diff_day_last_visit_second / (60 * 60 * 24));
+
+            //cek apakah tanggal sekarang diperbolehkan untuk kunjungan toko kembali atau tidak
+            if ($store['interval'] == "biweekly") {
+                //jika biweekly maka interval kunjungan ke toko kembali adalah 14 hari
+                if ($diff_day_last_visit < 14) {
+                    $can_visit_store = false;
+                }
+            } else if ($store['interval'] == "weekly") {
+                //jika weekly maka interval kunjungan ke toko kembali adalah 14 hari
+                if ($diff_day_last_visit < 7) {
+                    $can_visit_store = false;
+                }
+            }
+        }
+        return $can_visit_store;
+    }
+
+    private function checkPossibleDateForFirstTimeVisitStore($store, $date, $month, $year) {
+        //cek apakah tanggal sekarang dimungkinkan untuk jadi kunjungan pertama kali pada toko yang memiliki interval biweekly dan weekly
+
+        $can_visit_store = true;
+        $store_visited_dates = $store['visited_date'];
+        if (count($store_visited_dates) == 0 && $store['visit_remaining'] != 0) {
+            if ($store['interval'] == "biweekly") {
+
+                $temp_date = $date;
+                //perulangan sebanyak total kunjungan yang diharuskan oleh toko
+                for ($j = 1; $j < $store['visit_remaining']; $j++) {
+                    //tambahkan 14 hari kedepan dari tanggal sekarang
+                    $newDate = date('Y-m-d', strtotime($temp_date . " +14 days"));
+                    //periksa apakah tanggal 14 hari kedepan masih dibulan yang sama atau tidak
+                    if (date("Y-m", strtotime($newDate)) != $year . "-" . $month) {
+                        $can_visit_store = false;
+                        $err_message = "$date - Sudah beda bulan";
+                        break;
+                    } else {
+                        $temp_date = date('Y-m-d', strtotime($temp_date . " +14 days"));
+                    }
+                }
+
+            } else if ($store['interval'] == "weekly") {
+
+                $temp_date = $date;
+                //perulangan sebanyak total kunjungan yang diharuskan oleh toko
+                for ($j = 1; $j <= $store['visit_remaining']; $j++) {
+                    //tambahkan 7 hari kedepan dari tanggal sekarang
+                    $newDate = date('Y-m-d', strtotime($temp_date . " +7 days"));
+                    //periksa apakah tanggal 7 hari kedepan masih dibulan yang sama atau tidak
+                    if (date("Y-m", strtotime($newDate)) != $year . "-" . $month) {
+                        $can_visit_store = false;
+                        $err_message = "$date - Sudah beda bulan";
+                        break;
+                    } else {
+                        $temp_date = date('Y-m-d', strtotime($temp_date . " +7 days"));
+                    }
+                }
+
+            }
+        }
+
+        return $can_visit_store;
     }
 
     public function store(Request $request) {
@@ -187,593 +312,289 @@ class DashboardController extends Controller
         if($request->hasFile('file')) {
 
             $file = $request->file('file');
+            $logic = $request->input("logic");
+
+            if($logic == "") {
+                return redirect()->route('dashboard')->with('error',"Logika belum dipilih");
+            }
+
             $file_content = file_get_contents($file->getRealPath()); //mendapatkan isi dari file csv yang sudah diupload
 
             $stores = $this->createListStoreFromCSV($file_content);
             $sales = $this->createListSales();
             $sales = $this->generateScheduleSales($sales);
 
-            $total_date_in_month = date("t", strtotime($this->date)); //menghitung banyak nya hari pada tanggal yang sudah ditentukan
-
-            $is_all_visited = false; //indikator untuk menentukan apakah semua toko sudah dikunjungi atau belum
-            $cur_index_store = 0; //index untuk membaca detail toko di dalam array toko
-
-            //lakukan perulang selama toko masih belum dikunjungi
-            while(!$is_all_visited) {
-
-                //perulangan sebanyak total hari dari tanggal yang sudah dtentukan (31 hari di bulan oktober 2024)
-                for($i=1;$i<=$total_date_in_month;$i++) {
-
-                    $month = date("m", strtotime($this->date)); //mengambil 2 digit angka bulan dari tanggal yang sudah ditentukan
-                    $year = date("Y", strtotime($this->date)); //mengambil 4 digit angka tahun dari tanggal yang sudah ditentukan
-                    $date = $year . "-" . $month . "-" . str_pad($i,2,"0",STR_PAD_LEFT); //buat tanggal berdasarkan perulangan (contoh 2024-10-01)
-
-                    //perulangan sebanyak total sales
-                    foreach($sales as $index => $value) {
-
-                        $sales_schedules = $value['schedule']; //ambil jadwal kunjungan sales
-
-                        //perulangan sebanyak jadwal sales yang sedang diproses
-                        /*
-                            Contoh struktur data $sales_schedules :
-
-                            $sales[$i]['schedule'][] = array(
-                            'date' => '2024-10-01'
-                            'remaining_visit_store' => 30
-                            'store' => array(),
-                            );
-                         */
-                        foreach($sales_schedules as $index2 => $sales_schedule) {
-
-                            /*
-                                Contoh struktur data $sales_schedule :
-
-                                $sales_schedule = array(
-                                    'date' => '2024-10-01'
-                                    'remaining_visit_store' => 30
-                                    'store' => array(),
-                                );
-                             */
-
-                            //periksa apakah jadwal kunjungan sales terdapat tanggal 2024-10-01, dan sisa kunjungan yang dimiliki lebih dari 0
-                            if($sales_schedule['date'] == $date && $sales_schedule['remaining_visit_store'] != 0) {
-
-                                //Jika jadwal kunjungan sales sudah tidak kosong pada tanggal 2024-10-01
-                                if( count($sales_schedule['store']) > 0) {
-
-                                    $cur_index_store = 0;
-
-                                    $last_visit_store = $sales_schedule['store'][count($sales_schedule['store']) - 1];
-
-                                    $diff_distance = null;
-                                    $nearest_store = null;
-                                    $last_distance_with_last_store = 0;
-
-                                    $exclude_stores = array();
-
-
-                                    foreach ($stores as $index3 => $store) {
-
-                                        if ($store['visit_remaining'] > 0) {
-
-                                            $can_visit_store = true;
-
-                                            if ($last_distance_with_last_store == 0) {
-                                                if($last_visit_store['code'] != $store['code']) { // cek apakah store terakhir yang dikunjungi sama atau tidak dengan store yang akan di looping
-                                                    $diff_distance = $this->distance($store['latitude'], $store['longitude'], $last_visit_store['latitude'], $last_visit_store['longitude']);
-
-                                                } else {
-                                                    $can_visit_store = false;
-                                                }
-
-                                            } else {
-
-                                                if ($nearest_store['code'] != $store['code']) { // cek apakah store terakhir yang dikunjungi sama atau tidak dengan store yang akan di looping
-                                                    $diff_distance = $this->distance($store['latitude'], $store['longitude'], $nearest_store['latitude'], $nearest_store['longitude']);
-                                                } else {
-                                                    $can_visit_store = false;
-                                                }
-                                            }
-
-                                            if ($can_visit_store) {
-                                                //check if sales already visit same store in same date
-                                                foreach ($sales_schedule['store'] as $index4 => $sales_store) {
-                                                    if ($sales_store['code'] == $store['code']) {
-                                                        $can_visit_store = false;
-                                                        $err_message = "$date - Sudah divisit oleh sales yang sama";
-                                                        break;
-                                                    }
-                                                }
-                                            }
-
-
-                                            if ($can_visit_store) {
-                                                if(count($store['visited_date'])>0) {
-                                                    $store_visited_dates = $store['visited_date'];
-                                                    //check if store already visited in same date or not
-
-                                                    foreach ($store_visited_dates as $index4 => $store_visited_date) {
-
-                                                        if ($store_visited_date == $date) {
-
-                                                            $can_visit_store = false;
-
-                                                            $err_message = "$date - Sudah pernah divisit di tanggal yang sama";
-                                                            break;
-                                                        }
-                                                    }
-                                                 }
-                                            }
-
-
-                                            if($can_visit_store) {
-                                                if(count($store['visited_date'])>0) {
-
-                                                    $visited_dates = $store['visited_date'];
-                                                    $diff_day_last_visit_second = 0;
-                                                    if(strtotime($date) > strtotime($visited_dates[count($visited_dates) - 1])) {
-                                                        $diff_day_last_visit_second =  strtotime($date) - strtotime($visited_dates[count($visited_dates) - 1]);
-                                                    } else {
-                                                        $diff_day_last_visit_second = strtotime($visited_dates[count($visited_dates) - 1]) - strtotime($date);
-                                                    }
-                                                    $diff_day_last_visit = round($diff_day_last_visit_second / (60 * 60 * 24));
-
-                                                    //cek apakah tanggal sekarang diperbolehkan untuk kunjungan toko kembali atau tidak
-
-                                                    if ($store['interval'] == "biweekly") {
-                                                        //jika biweekly maka interval kunjungan ke toko kembali adalah 14 hari
-                                                        if ($diff_day_last_visit < 14) {
-                                                            $can_visit_store = false;
-                                                        }
-                                                    } else if ($store['interval'] == "weekly") {
-                                                        //jika weekly maka interval kunjungan ke toko kembali adalah 14 hari
-                                                        if ($diff_day_last_visit < 7) {
-                                                            $can_visit_store = false;
-                                                        }
-                                                    }
-
-                                                }
-                                            }
-
-
-                                            if ($can_visit_store) {
-                                                //cek apakah toko yang sedang diperiksa belum pernah dilakukan kunjungan dan jumlah kunjugan yang terisa masih lebih dari 0
-                                                $store_visited_dates = $store['visited_date'];
-                                                if (count($store_visited_dates) == 0 && $store['visit_remaining'] != 0) {
-                                                    if ($store['interval'] == "biweekly") {
-
-                                                        $temp_date = $date;
-                                                        for ($j = 1; $j < $store['visit_remaining']; $j++) {
-
-                                                            $newDate = date('Y-m-d', strtotime($temp_date . " +14 days"));
-                                                            if (date("Y-m", strtotime($newDate)) != $year . "-" . $month) {
-                                                                $can_visit_store = false;
-                                                                $err_message = "$date - Sudah beda bulan";
-
-                                                                break;
-                                                            } else {
-                                                                $temp_date = date('Y-m-d', strtotime($temp_date . " +14 days"));
-                                                            }
-                                                        }
-
-                                                    } else if ($store['interval'] == "weekly") {
-
-                                                        $temp_date = $date;
-                                                        for ($j = 1; $j <= $store['visit_remaining']; $j++) {
-                                                            $newDate = date('Y-m-d', strtotime($temp_date . " +7 days"));
-                                                            if (date("Y-m", strtotime($newDate)) != $year . "-" . $month) {
-                                                                $can_visit_store = false;
-                                                                $err_message = "$date - Sudah beda bulan";
-
-                                                                break;
-                                                            } else {
-                                                                $temp_date = date('Y-m-d', strtotime($temp_date . " +7 days"));
-                                                            }
-                                                        }
-
-                                                    }
-                                                }
-                                            }
-
-
-                                            if ($can_visit_store && ($last_distance_with_last_store > $diff_distance || $last_distance_with_last_store == 0)) {
-
-                                                $last_distance_with_last_store = $diff_distance;
-                                                $nearest_store = $store;
-                                            }
-                                        }
-                                    }
-
-                                    if($nearest_store == null) {
-                                        $can_visit_store = false;
-                                    }
-
-
-                                    if ($can_visit_store) {
-                                        //if can visit, log to sales and store
-                                        $sales_schedule['remaining_visit_store'] -= 1;
-                                        $sales_schedule['store'][] = $nearest_store;
-                                        $sales_schedules[$index2] = $sales_schedule;
-                                        $sales[$index]['schedule'] = $sales_schedules;
-
-                                        foreach ($stores as $index3 => $store) {
-                                            if ($nearest_store['code'] == $store['code']) {
-                                                $store['visit_remaining'] -= 1;
-                                                $store['visited_date'][] = $date;
-                                                $store['distance'] = $last_distance_with_last_store;
-                                                sort($store['visited_date'], SORT_ASC);
-                                                $stores[$index3] = $store;
-                                                break;
-                                            }
-                                        }
-                                        break;
-                                    }
-
-                                } else {
-
-                                    /*
-                                     * Segmen program ini berfungsi untuk memasukkan toko sebanyak 1 buah dari daftar toko ke tiap sales pada tanggal 1
-                                     *
-                                     * Jika daftar kunjungan sales masih kosong, maka masukkan toko di index ke 0 dst
-                                     */
-
-                                    $store = $stores[$cur_index_store];
-
-                                    $sales_schedule['remaining_visit_store'] -= 1; //jumlah sisa kunjungan sales ke toko berkurang 1
-
-                                    $sales_schedule['store'][] = $store; //masukan detail toko ke jadwal kunjungan sales
-                                    $sales_schedules[$index2] = $sales_schedule;
-                                    $sales[$index]['schedule'] = $sales_schedules; //simpan kembali data jadwal kunjungan yang sudah diubah ke sales terkait
-
-                                    $store['visit_remaining'] -= 1; //jumlah kebutuhan kunjungan tiap toko berkurang 1 (weekly, biweekly, monthly)
-                                    $store['visited_date'][] = $date; //masukkan tanggal kunjungan yang akan dilakukan sales
-                                    $stores[$cur_index_store] = $store; //simpan kembali data toko yang sudah diubah ke daftar toko
-
-                                    $cur_index_store++;
-                                    break;
-                                }
-                            }
-
-                        }
-                    }
-
-                }
-
-                /*
-                 * Lakukan pengecekkan terhadap semua toko apakah jumlah kebutuhan kunjungan masih ada atau tidak
-                 */
-                $is_all_visited = true;
-                foreach($stores as $index => $store) {
-                    if($store['visit_remaining'] > 0) {
-                        $is_all_visited = false;
-                        break;
-                    }
-                }
+            if($stores == null) {
+                return redirect()->route('dashboard')->with('error',"Terdapat kesalahan dalam pembuatan daftar toko, cek file");
             }
 
-            $html = $this->createTable($sales, $stores);
-            echo $html;
+
+            $table_html = "";
+
+            if($logic == "a") {
+                $table_html = $this->logicA($sales, $stores);
+            } else {
+                $table_html = $this->logicB($sales, $stores);
+            }
+
+            $data = array(
+                'table_html' => $table_html,
+                'logic' => $logic,
+            );
+            return view('result', $data);
+        } else {
+            return redirect()->route('dashboard')->with('error',"File CSV belum dipilih");
         }
     }
 
+    private function logicB($sales, $stores) {
+        $total_date_in_month = date("t", strtotime($this->date)); //menghitung banyak nya hari pada tanggal yang sudah ditentukan
 
-    public function store2(Request $request) {
-        if($request->hasFile('file')) {
-            $file = $request->file('file');
-            $file_content = file_get_contents($file->getRealPath());
+        $is_all_visited = false; //indikator untuk menentukan apakah semua toko sudah dikunjungi atau belum
+        $cur_index_store = 0; //index untuk membaca detail toko di dalam array toko
 
-            //explode by line
-            $data_no_linebreak = explode("\n", $file_content);
-            //remove first array (because contain description)
-            $data_no_linebreak = array_slice($data_no_linebreak, 1, -1);
+        //lakukan perulang selama toko masih belum dikunjungi
+        while(!$is_all_visited) {
 
-            //list sales
-            $sales = array();
-            //create dummy sales
-            for($i=0; $i<$this->countSales;$i++) {
-                $sales[] = array(
-                    'code' => str_pad($i+1, 5, "0", STR_PAD_LEFT),
-                    'name' => "Sales ".($i+1),
-                    'schedule' => array(),
-                );
-            }
+            //perulangan sebanyak total hari dari tanggal yang sudah dtentukan (31 hari di bulan oktober 2024)
+            for($i=1;$i<=$total_date_in_month;$i++) {
 
-            //list store
-            $stores = array();
-            $invalid_stores = array();
-            foreach($data_no_linebreak as $index => $value) {
+                $month = date("m", strtotime($this->date)); //mengambil 2 digit angka bulan dari tanggal yang sudah ditentukan
+                $year = date("Y", strtotime($this->date)); //mengambil 4 digit angka tahun dari tanggal yang sudah ditentukan
+                $date = $year . "-" . $month . "-" . str_pad($i,2,"0",STR_PAD_LEFT); //buat tanggal berdasarkan perulangan (contoh 2024-10-01)
 
-                $explode = explode(",", $value);
-                //Get total monday in a month
-                $total_monday = $this->countMondayInMonth($this->date);
+                //perulangan sebanyak total sales
+                foreach($sales as $index => $value) {
 
-                switch (trim(strtolower($explode[6]))) {
-                    case "weekly":
-                        $remaining_visit = $total_monday;
-                        break;
-                    case "biweekly":
-                        $remaining_visit = 2;
-                        break;
-                    case "monthly":
-                        $remaining_visit = 1;
-                        break;
-                    default:
-                        $remaining_visit = 0;
-                        break;
-                }
+                    $sales_schedules = $value['schedule']; //ambil jadwal kunjungan sales
 
-                if($explode[2] != 0 || $explode[3] != 0) {
-                    $stores[] = array(
-                        'name' => trim($explode[0]),
-                        'code' => trim($explode[1]),
-                        'longitude' => $explode[2],
-                        'latitude' => $explode[3],
-                        'address' => trim($explode[4]),
-                        'postal_code' => trim($explode[5]),
-                        'interval' => strtolower(trim($explode[6])),
-                        'visit_remaining' => $remaining_visit,
-                        'visited_date' => array(),
-                        'km_distance_from_headquarter' => $this->distance($this->headQuarterLatitude, $this->headQuarterLongitude, $explode[3], $explode[2]),
-                    );
-                } else {
-                    $invalid_stores[] = array(
-                        'name' => trim($explode[0]),
-                        'code' => trim($explode[1]),
-                        'longitude' => $explode[2],
-                        'latitude' => $explode[3],
-                        'address' => trim($explode[4]),
-                        'postal_code' => trim($explode[5]),
-                        'interval' => strtolower(trim($explode[6])),
-                        'visit_remaining' => $remaining_visit,
-                        'visited_date' => array(),
-                        'km_distance_from_headquarter' => $this->distance($this->headQuarterLatitude, $this->headQuarterLongitude, $explode[3], $explode[2]),
-                    );
-                }
-            }
+                    //perulangan sebanyak jadwal sales yang sedang diproses
+                    /*
+                        Contoh struktur data $sales_schedules :
 
-            //sort store by near to far from headquarters
-            $keys = array_column($stores, 'km_distance_from_headquarter');
-            array_multisort($keys, SORT_ASC, $stores);
-
-            //grouping store by interval visit
-            $store_weekly = array();
-            $store_biweekly = array();
-            $store_monthly = array();
-
-            foreach($stores as $index => $value) {
-                if(strtolower($value['interval']) == 'weekly') {
-                    $store_weekly[] = $value;
-                } elseif(strtolower($value['interval']) == 'biweekly') {
-                    $store_biweekly[] = $value;
-                } elseif(strtolower($value['interval']) == 'monthly') {
-                    $store_monthly[] = $value;
-                }
-            }
-
-            $total_date_in_month = date("t", strtotime($this->date));
-            for($i=0;$i<count($sales);$i++) {
-                for($j=1;$j<=$total_date_in_month;$j++) {
-                    $month = date("m", strtotime($this->date));
-                    $year = date("Y", strtotime($this->date));
-                    $iso_numeric_date = date("N", strtotime($year."-".$month."-".$j));
-
-                    if($iso_numeric_date != 7) {
                         $sales[$i]['schedule'][] = array(
-                            'date' => $year . "-" . $month . "-" . str_pad($j,2,"0",STR_PAD_LEFT),
-                            'remaining_visit_store' => $this->totalMaxVisitStore,
-                            'store' => array(),
+                        'date' => '2024-10-01'
+                        'remaining_visit_store' => 30
+                        'store' => array(),
                         );
-                    }
-                }
-            }
+                     */
+                    foreach($sales_schedules as $index2 => $sales_schedule) {
 
+                        /*
+                            Contoh struktur data $sales_schedule :
 
-            echo "<pre>";
-            echo "Weekly : ".count($store_weekly)." Biweekly :".count($store_biweekly)." Monthly :".count($store_monthly);
-            echo "<br/>";
-            echo "Total Monday : ".$this->countMondayInMonth($this->date);
-            echo "<br/>";
+                            $sales_schedule = array(
+                                'date' => '2024-10-01'
+                                'remaining_visit_store' => 30
+                                'store' => array(),
+                            );
+                         */
 
-            echo "<pre>";
-            $is_all_visited = false;
-            while(!$is_all_visited) {
-                for($i=1;$i<=$total_date_in_month;$i++) {
-                    $month = date("m", strtotime($this->date));
-                    $year = date("Y", strtotime($this->date));
-                    $date = $year . "-" . $month . "-" . str_pad($i,2,"0",STR_PAD_LEFT);
+                        //periksa apakah jadwal kunjungan sales terdapat tanggal 2024-10-01, dan sisa kunjungan yang dimiliki lebih dari 0
+                        if($sales_schedule['date'] == $date && $sales_schedule['remaining_visit_store'] != 0) {
 
-                    foreach($sales as $index => $value) {
-                        $sales_schedules = $value['schedule'];
-                        $is_sales_visited_a_store = false;
+                            //Jika jadwal kunjungan sales sudah tidak kosong pada tanggal 2024-10-01
+                            if( count($sales_schedule['store']) > 0) {
 
-                        foreach($sales_schedules as $index2 => $sales_schedule) {
+                                $cur_index_store = 0;
 
-                            //check if sales has remaining visit store for spesific date
-                            if($sales_schedule['date'] == $date && $sales_schedule['remaining_visit_store'] != 0) {
+                                $last_visit_store = $sales_schedule['store'][count($sales_schedule['store']) - 1];
 
-                                //looping every data store
-                                foreach($stores as $index3 => $store) {
-                                    $can_visit_store = true;
-                                    $err_message = "";
+                                $diff_distance = null;
+                                $nearest_store = null;
+                                $last_distance_with_last_store = 0;
 
+                                foreach ($stores as $index3 => $store) {
 
-                                    //check if store has quota for sales visit
-                                    if ($store['visit_remaining'] <= 0) {
-                                        $can_visit_store = false;
-                                    }
-
-                                    if($can_visit_store) {
-                                        //check if sales already visit same store in same date
-                                        foreach ($sales_schedule['store'] as $index4 => $sales_store) {
-                                            if ($sales_store['code'] == $store['code']) {
+                                    if ($store['visit_remaining'] > 0) {
+                                        $can_visit_store = true;
+                                        if ($last_distance_with_last_store == 0) {
+                                            // cek apakah toko terakhir yang dikunjungi sama atau tidak dengan store yang akan di looping
+                                            if($last_visit_store['code'] != $store['code']) {
+                                                $diff_distance = $this->distance($store['latitude'], $store['longitude'], $last_visit_store['latitude'], $last_visit_store['longitude']);
+                                            } else {
                                                 $can_visit_store = false;
-                                                $err_message = "$date - Sudah divisit oleh sales yang sama";
-                                                break;
                                             }
-                                        }
-                                    }
-
-                                    if($can_visit_store) {
-                                        $store_visited_dates = $store['visited_date'];
-                                        //check if store already visited in same date or not
-
-                                        foreach ($store_visited_dates as $index4 => $value) {
-
-                                            if ($value == $date) {
+                                        } else {
+                                            // cek apakah toko yang dianggap terdekat dengan toko yang dikunjungi terakhir sama atau tidak dengan toko yang akan di looping
+                                            if ($nearest_store['code'] != $store['code']) {
+                                                $diff_distance = $this->distance($store['latitude'], $store['longitude'], $nearest_store['latitude'], $nearest_store['longitude']);
+                                            } else {
                                                 $can_visit_store = false;
-
-                                                $err_message = "$date - Sudah divisit di hari yang sama";
-                                                break;
                                             }
                                         }
-                                    }
 
-                                    if($can_visit_store) {
-                                        //check if date is suitable for another visit (more than 1) in one month
+                                        if ($can_visit_store) {
+                                            //cek apakah toko sudah termasuk di jadwal kunjungan sales
+                                            $can_visit_store = $this->checkStoreIsAlreadyVisitedBySameSales($sales_schedule, $store);
+                                        }
+                                        if ($can_visit_store) {
+                                            //cek apakah toko sudah dikunjungi di tanggal ini
+                                            $can_visit_store = $this->checkStoreIsAlreadyVisitedAtSpesificDate($store, $date);
+                                        }
+                                        if($can_visit_store) {
+                                            //cek kunjungan interval toko apa sudah memenuhi syarat atatu tidak (weekly, biweekly, monthly)
+                                            $can_visit_store = $this->checkIntervalVisitStore($store, $date);
+                                        }
+                                        if ($can_visit_store) {
+                                            //cek apakah tanggal sekarang mengakomidir untuk dijadikan kunjungan pertama toko (weekly, biweekly)
+                                            $can_visit_store = $this->checkPossibleDateForFirstTimeVisitStore($store, $date, $month, $year);
+                                        }
 
-                                        $store_visited_dates = $store['visited_date'];
-                                        if(count($store_visited_dates) == 0 && $store['visit_remaining'] != 0) {
-                                            if ($store['interval'] == "biweekly") {
-
-                                                $temp_date = $date;
-                                                for($j = 1; $j < $store['visit_remaining'];$j++) {
-
-                                                    $newDate = date('Y-m-d', strtotime($temp_date . " +14 days"));
-                                                    if (date("Y-m",strtotime($newDate)) != $year . "-" . $month) {
-                                                        $can_visit_store = false;
-                                                        $err_message = "$date - Sudah beda bulan";
-
-                                                        break;
-                                                    } else {
-                                                        $temp_date = date('Y-m-d', strtotime($temp_date . " +14 days"));
-                                                    }
-                                                }
-
-                                            } else if ($store['interval'] == "weekly") {
-
-                                                $temp_date = $date;
-                                                for($j = 1; $j<= $store['visit_remaining'];$j++) {
-                                                    $newDate = date('Y-m-d', strtotime($temp_date . " +7 days"));
-                                                    if (date("Y-m",strtotime($newDate)) != $year . "-" . $month) {
-                                                        $can_visit_store = false;
-                                                        $err_message = "$date - Sudah beda bulan";
-
-
-                                                        break;
-                                                    } else {
-                                                        $temp_date = date('Y-m-d', strtotime($temp_date . " +7 days"));
-                                                    }
-                                                }
-
-                                            }
+                                        //cek apakah toko yang diperiksa jarak tempuh nya lebih kecil atau tidak
+                                        if ($can_visit_store && ($last_distance_with_last_store > $diff_distance || $last_distance_with_last_store == 0)) {
+                                            $last_distance_with_last_store = $diff_distance;
+                                            $nearest_store = $store;
                                         }
                                     }
-
-                                    if($can_visit_store) {
-                                        //check interval visit store monthly / biweekly / weekly
-
-                                        $store_visited_dates = $store['visited_date'];
-                                        if(count($store_visited_dates) != 0) {
-                                            $diff_day_last_visit_second = strtotime($date) - strtotime($store_visited_dates[count($store_visited_dates) -1]);
-                                            $diff_day_last_visit = round($diff_day_last_visit_second / (60 * 60 * 24));
-
-
-                                            if($store['interval'] == "biweekly") {
-                                                if($diff_day_last_visit < 14 || $diff_day_last_visit > 21) {
-                                                    $can_visit_store = false;
-
-                                                    $err_message = "$date - Belum 14 hari";
-                                                }
-                                            } else  if($store['interval'] == "weekly") {
-                                                if($diff_day_last_visit < 7 || $diff_day_last_visit > 14) {
-                                                    $can_visit_store = false;
-
-                                                    $err_message = "$date - Belum 7 hari";
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    if($can_visit_store) {
-                                        //if can visit, log to sales and store
-                                        $sales_schedule['remaining_visit_store'] -= 1;
-                                        $sales_schedule['store'][] = $store;
-                                        $sales_schedules[$index2] = $sales_schedule;
-                                        $sales[$index]['schedule'] = $sales_schedules;
-
-                                        $store['visit_remaining'] -= 1;
-                                        $store['visited_date'][] = $date;
-                                        sort($store['visited_date'], SORT_ASC);
-                                        $stores[$index3] = $store;
-
-                                        $is_sales_visited_a_store = true;
-
-                                        break;
-                                    }
-
-
                                 }
 
-                            }
+                                if($nearest_store == null) {
+                                    $can_visit_store = false;
+                                }
 
-                            if($is_sales_visited_a_store) {
 
+                                if ($can_visit_store) {
+                                    //jika kunjungan dapat dilakukan dan sudah menemukan toko terdekat, maka simpan ke data kunjungan sales
+
+                                    $sales_schedule['remaining_visit_store'] -= 1;
+                                    $sales_schedule['store'][] = $nearest_store;
+                                    $sales_schedules[$index2] = $sales_schedule;
+                                    $sales[$index]['schedule'] = $sales_schedules;
+
+                                    foreach ($stores as $index3 => $store) {
+                                        if ($nearest_store['code'] == $store['code']) {
+                                            $store['visit_remaining'] -= 1;
+                                            $store['visited_date'][] = $date;
+                                            $store['distance'] = $last_distance_with_last_store;
+                                            sort($store['visited_date'], SORT_ASC);
+                                            $stores[$index3] = $store;
+                                            break;
+                                        }
+                                    }
+                                    break;
+                                }
+
+                            } else {
+
+                                /*
+                                 * Segmen program ini berfungsi untuk memasukkan toko sebanyak 1 buah dari daftar toko ke tiap sales pada tanggal 1
+                                 *
+                                 * Jika daftar kunjungan sales masih kosong, maka masukkan toko di index ke 0 dst
+                                 */
+
+                                $store = $stores[$cur_index_store];
+
+                                $sales_schedule['remaining_visit_store'] -= 1; //jumlah sisa kunjungan sales ke toko berkurang 1
+
+                                $sales_schedule['store'][] = $store; //masukan detail toko ke jadwal kunjungan sales
+                                $sales_schedules[$index2] = $sales_schedule;
+                                $sales[$index]['schedule'] = $sales_schedules; //simpan kembali data jadwal kunjungan yang sudah diubah ke sales terkait
+
+                                $store['visit_remaining'] -= 1; //jumlah kebutuhan kunjungan tiap toko berkurang 1 (weekly, biweekly, monthly)
+                                $store['visited_date'][] = $date; //masukkan tanggal kunjungan yang akan dilakukan sales
+                                $stores[$cur_index_store] = $store; //simpan kembali data toko yang sudah diubah ke daftar toko
+
+                                $cur_index_store++;
                                 break;
                             }
                         }
+
                     }
                 }
 
-                $is_all_visited = true;
-                foreach($stores as $index => $store) {
-                    if($store['visit_remaining'] > 0) {
-                        $is_all_visited = false;
-                        break;
-                    }
-                }
             }
 
-            echo "<table cellpadding='10' cellspacing='10' border='1'>";
-            echo "<tr>";
-            echo "<td>Sales</td>";
+            /*
+             * Lakukan pengecekkan terhadap semua toko apakah jumlah kebutuhan kunjungan masih ada atau tidak
+             */
+            $is_all_visited = $this->isAllStoreAlreadyVisited($stores);
+        }
+        $html = $this->createTable($sales, $stores);
+        return $html;
+    }
+
+
+    public function logicA($sales, $stores) {
+        $total_date_in_month = date("t", strtotime($this->date)); //menghitung banyak nya hari pada tanggal yang sudah ditentukan
+
+        $is_all_visited = false; //indikator untuk menentukan apakah semua toko sudah dikunjungi atau belum
+        $cur_index_store = 0; //index untuk membaca detail toko di dalam array toko
+
+        //lakukan perulang selama toko masih belum dikunjungi
+        while(!$is_all_visited) {
             for($i=1;$i<=$total_date_in_month;$i++) {
                 $month = date("m", strtotime($this->date));
                 $year = date("Y", strtotime($this->date));
-                $date = str_pad($i,2,"0",STR_PAD_LEFT);
-                echo "<td>".$date."-".$month."-".$year."</td>";
-            }
-            echo "</tr>";
-            for($i=0;$i<count($sales);$i++) {
-                echo "<tr>";
-                echo "<td>".$sales[$i]['name']."</td>";
-                for($j=1;$j<=$total_date_in_month;$j++) {
-                    $current_date = str_pad($j,2,"0",STR_PAD_LEFT);
-                    $sales_schedules = $sales[$i]['schedule'];
-                    $is_empty = true;
-                    foreach($sales_schedules as $index => $sales_schedule) {
-                        if(date("d",strtotime($sales_schedule['date'])) == $current_date) {
-                            echo "<td>";
-                            echo "<ol>";
-                            $stores = $sales_schedule['store'];
-                            foreach($stores as $index => $store) {
-                                echo "<li>".$store['name']." - ".$store['interval']."</li>";
+                $date = $year . "-" . $month . "-" . str_pad($i,2,"0",STR_PAD_LEFT);
+
+                //perulangan sales
+                foreach($sales as $index => $value) {
+                    $sales_schedules = $value['schedule'];
+                    $is_sales_visited_a_store = false;
+
+                    //perulangan jadwal sales
+                    foreach($sales_schedules as $index2 => $sales_schedule) {
+
+                        //cek apakah sales memiliki jatah kunjungan toko pada tanggal ini
+                        if($sales_schedule['date'] == $date && $sales_schedule['remaining_visit_store'] != 0) {
+
+                            //perulangan tiap toko
+                            foreach($stores as $index3 => $store) {
+                                $can_visit_store = true;
+
+                                //cek apakah toko masih memiliki jumlah kunjungan
+                                if ($store['visit_remaining'] <= 0) {
+                                    $can_visit_store = false;
+                                }
+
+                                if ($can_visit_store) {
+                                    //cek apakah toko sudah dikunjungi di tanggal ini
+                                    $can_visit_store = $this->checkStoreIsAlreadyVisitedAtSpesificDate($store, $date);
+                                }
+                                if ($can_visit_store) {
+                                    //cek apakah tanggal sekarang mengakomidir untuk dijadikan kunjungan pertama toko (weekly, biweekly)
+                                    $can_visit_store = $this->checkPossibleDateForFirstTimeVisitStore($store, $date, $month, $year);
+                                }
+                                if($can_visit_store) {
+                                    //cek kunjungan interval toko apa sudah memenuhi syarat atatu tidak (weekly, biweekly, monthly)
+                                    $can_visit_store = $this->checkIntervalVisitStore($store, $date);
+                                }
+
+                                if($can_visit_store) {
+                                    //if can visit, log to sales and store
+                                    $sales_schedule['remaining_visit_store'] -= 1;
+                                    $sales_schedule['store'][] = $store;
+                                    $sales_schedules[$index2] = $sales_schedule;
+                                    $sales[$index]['schedule'] = $sales_schedules;
+
+                                    $store['visit_remaining'] -= 1;
+                                    $store['visited_date'][] = $date;
+                                    sort($store['visited_date'], SORT_ASC);
+                                    $stores[$index3] = $store;
+
+                                    $is_sales_visited_a_store = true;
+
+                                    break;
+                                }
+
+
                             }
 
-                            echo "</ol>";
-                            echo "</td>";
-                            $is_empty = false;
+                        }
 
+                        //Jika sales sudah mengunjungi toko, berhenti perulangan, lanjut ke sales berikutnya
+                        if($is_sales_visited_a_store) {
                             break;
                         }
                     }
-                    if($is_empty) {
-                        echo "<td>-</td>";
-                    }
                 }
-                echo "</tr>";
             }
-            echo "</table>";
+            //cek apakah semua toko sudah selesai dikunjungi apa belum
+            $is_all_visited = $this->isAllStoreAlreadyVisited($stores);
         }
+        $html = $this->createTable($sales, $stores);
+        return $html;
     }
 
     private function distance($lat1, $lon1, $lat2, $lon2,)
